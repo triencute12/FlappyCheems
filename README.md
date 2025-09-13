@@ -1,1 +1,203 @@
-# FlappyCheems
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flappy Cheems — có ma hù</title>
+  <style>
+    :root{--bg:#86d2ff}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#a8e6ff, #6ccfff);}
+    .wrap{width:100%;max-width:900px;padding:18px}
+    h1{color:#033b5a;text-align:center;margin:6px 0 12px}
+    canvas{display:block;width:100%;background:linear-gradient(#9be7ff,#6ccfff);border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.15)}
+    .controls{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+    .score{font-weight:700;color:#033b5a}
+    .btn{background:#fff;border-radius:8px;padding:8px 12px;border:none;cursor:pointer;box-shadow:0 6px 18px rgba(2,6,23,0.08)}
+    .hint{color:#064a6b;font-size:13px}
+    .overlay{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);}
+    .card{background:#fff;padding:18px;border-radius:10px;text-align:center;width:320px}
+
+    /* full-screen scary overlay */
+    #scaryOverlay{position:fixed;top:0;left:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;background:#000;z-index:9999}
+    #scaryOverlay img{width:100%;height:100%;object-fit:cover;display:block}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Flappy Cheems — Dễ hơn và kem dài hơn</h1>
+    <canvas id="game" width="900" height="600"></canvas>
+    <div class="controls">
+      <div class="score">Score: <span id="score">0</span></div>
+      <div class="hint">Nhấn <strong>space</strong> hoặc chạm để nhảy</div>
+      <div>
+        <button class="btn" id="startBtn">Bắt đầu / Khởi động lại</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overlay that previously showed at score 5 (kept if needed) -->
+  <div id="ghostOverlay" style="display:none"><img src="ghost.png" alt="ghost" style="width:100%;height:100%;object-fit:cover"/></div>
+
+  <!-- NEW: scary overlay shown PERMANENTLY at score == 2 -->
+  <div id="scaryOverlay"><img src="https://img.tripi.vn/cdn-cgi/image/width=700,height=700/https://gcs.tripi.vn/public-tripi/tripi-feed/img/478171GVH/anh-mo-ta.png" alt="scary"/></div>
+  <!-- Scary audio (place a file named 'scare.mp3' in same folder) -->
+  <audio id="scareAudio" src="scare.mp3" preload="auto" loop></audio>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width; const H = canvas.height;
+
+    const GAME_SPEED = 140;
+    const SPAWN_INTERVAL = 2200;
+    const MIN_GAP = 170;
+    const GRAVITY = 800;
+    const JUMP = -380;
+
+    let running = false;
+    let score = 0;
+    let pipes = [];
+    let spawnTimer = 0;
+
+    const player = {
+      x: 140,
+      y: H/2,
+      r: 22,
+      vy: 0,
+      gravity: GRAVITY,
+      jump: JUMP
+    };
+
+    function jump(){
+      if(!running) return startGame();
+      player.vy = player.jump;
+    }
+
+    document.addEventListener('keydown', e => { if(e.code === 'Space') jump(); });
+    canvas.addEventListener('mousedown', jump);
+    canvas.addEventListener('touchstart', e=>{ e.preventDefault(); jump(); }, {passive:false});
+    document.getElementById('startBtn').addEventListener('click', ()=> startGame(true));
+
+    function startGame(forceRestart=false){
+      // stop any scary audio and overlays when restarting
+      const scaryOverlay = document.getElementById('scaryOverlay');
+      const scareAudio = document.getElementById('scareAudio');
+      if(scaryOverlay) scaryOverlay.style.display = 'none';
+      if(scareAudio){ try{ scareAudio.pause(); scareAudio.currentTime = 0; }catch(e){} }
+
+      if(running && !forceRestart) return;
+      running = true; score = 0; pipes = []; spawnTimer = 0;
+      player.y = H/2; player.vy = 0;
+      document.getElementById('score').textContent = score;
+      last = performance.now();
+      requestAnimationFrame(loop);
+    }
+
+    function gameOver(){
+      running = false;
+      const overlay = document.createElement('div'); overlay.className='overlay';
+      overlay.innerHTML = `<div class="card"><h3>Game Over</h3><p>Score: ${score}</p><button id='try' class='btn'>Chơi lại</button></div>`;
+      document.body.appendChild(overlay);
+      document.getElementById('try').addEventListener('click', ()=>{ document.body.removeChild(overlay); startGame(true); });
+    }
+
+    function spawnPipe(){
+      const minLen = 40;
+      const maxLen = Math.floor((H - 80 - MIN_GAP) * 0.7);
+      const totalAvailable = H - 80 - MIN_GAP;
+      let topLen = Math.floor(Math.random() * (Math.max(1, totalAvailable - minLen))) + minLen;
+      topLen = Math.min(topLen, maxLen);
+      let bottomMax = totalAvailable - topLen;
+      bottomMax = Math.max(bottomMax, minLen);
+      let bottomLen = Math.floor(Math.random() * (bottomMax - minLen + 1)) + minLen;
+      if(topLen + bottomLen > totalAvailable) bottomLen = totalAvailable - topLen;
+      pipes.push({x: W + 80, topLen: topLen, bottomLen: bottomLen, passed:false});
+    }
+
+    function circleRectCollision(cx, cy, r, rx, ry, rw, rh){
+      const closestX = Math.max(rx, Math.min(cx, rx+rw));
+      const closestY = Math.max(ry, Math.min(cy, ry+rh));
+      const dx = cx - closestX; const dy = cy - closestY;
+      return (dx*dx + dy*dy) < r*r;
+    }
+
+    function drawBackground(){
+      ctx.fillStyle = '#9be7ff'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#5bb3e6'; ctx.fillRect(0,H-80,W,80);
+    }
+
+    function drawCheems(x,y,r){
+      ctx.save();
+      ctx.translate(x,y);
+      ctx.beginPath(); ctx.ellipse(r*0.1, r+6, r*0.9, r*0.35, 0,0,Math.PI*2); ctx.fillStyle='rgba(0,0,0,0.12)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle='#f2c38f'; ctx.fill();
+      ctx.beginPath(); ctx.arc(-6,-4,4,0,Math.PI*2); ctx.fillStyle='#231f20'; ctx.fill();
+      ctx.beginPath(); ctx.arc(6,-4,3.2,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0,6,5,3,0,0,Math.PI*2); ctx.fillStyle='#231f20'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-8,10); ctx.quadraticCurveTo(0,14,8,10); ctx.strokeStyle='#9a5f3a'; ctx.lineWidth=2; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-r+6,-r/3); ctx.quadraticCurveTo(-r-6, -r-6, -r/4, -r+4); ctx.fillStyle='#d39b6a'; ctx.fill();
+      ctx.restore();
+    }
+
+    function drawIceCreamColumn(x, topLen, bottomLen){
+      if(topLen > 0){
+        const scoopY = topLen - 18;
+        ctx.beginPath(); ctx.arc(x, scoopY, 26, 0, Math.PI*2); ctx.fillStyle='#ffd4d4'; ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x-22, scoopY+18); ctx.lineTo(x+22, scoopY+18); ctx.lineTo(x, 0); ctx.closePath(); ctx.fillStyle='#f0b36b'; ctx.fill();
+      }
+      if(bottomLen > 0){
+        const baseY = H - 80;
+        const scoopY = baseY - bottomLen + 18;
+        ctx.beginPath(); ctx.arc(x, scoopY, 26, 0, Math.PI*2); ctx.fillStyle='#ffd4d4'; ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x-22, scoopY-18); ctx.lineTo(x+22, scoopY-18); ctx.lineTo(x, baseY); ctx.closePath(); ctx.fillStyle='#f0b36b'; ctx.fill();
+      }
+    }
+
+    let last = performance.now();
+    function loop(now){
+      const dt = Math.min(40, now - last)/1000; last = now;
+      if(!running) return;
+
+      player.vy += player.gravity * dt;
+      player.y += player.vy * dt;
+
+      spawnTimer += dt*1000;
+      if(spawnTimer > SPAWN_INTERVAL){ spawnTimer = 0; spawnPipe(); }
+
+      for(let i=pipes.length-1;i>=0;i--){
+        pipes[i].x -= GAME_SPEED * dt;
+        if(!pipes[i].passed && pipes[i].x + 40 < player.x){
+          pipes[i].passed = true; score++;
+          document.getElementById('score').textContent = score;
+          // when score reaches 2, show scary image permanently and play scary audio in loop
+          if(score === 2){
+            const overlay = document.getElementById('scaryOverlay');
+            const audio = document.getElementById('scareAudio');
+            if(overlay){ overlay.style.display = 'flex'; }
+            if(audio){
+              audio.loop = true;
+              audio.play().catch(()=>{ /* autoplay may be blocked */ });
+            }
+            running = false;
+          }
+          if(score === 5){ const overlay = document.getElementById('ghostOverlay'); if(overlay) { overlay.style.display = 'flex'; setTimeout(()=>{ overlay.style.display='none'; }, 2000); } }
+        }
+        if(pipes[i].x < -160) pipes.splice(i,1);
+      }
+
+      if(player.y + player.r > H - 80){ player.y = H - 80 - player.r; gameOver(); }
+      if(player.y - player.r < 0){ player.y = player.r; player.vy = 0; }
+
+      ctx.clearRect(0,0,W,H);
+      drawBackground();
+      for(const p of pipes){ drawIceCreamColumn(p.x, p.topLen, p.bottomLen); }
+      drawCheems(player.x, player.y, player.r);
+
+      if(running) requestAnimationFrame(loop);
+    }
+
+    (function init(){ ctx.clearRect(0,0,W,H); drawBackground(); drawCheems(player.x, player.y, player.r); })();
+  </script>
+</body>
+</html>
