@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Flappy Cheems — có ma hù</title>
+  <title>Flappy Cheems </title>
   <style>
     :root{--bg:#86d2ff}
     html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial}
